@@ -25,6 +25,7 @@ end
 function M.try_patterns(current_file, patterns)
   for _, pattern_pair in ipairs(patterns) do
     local source, alternate = pattern_pair[1], pattern_pair[2]
+    
     -- Try source -> alternate
     local matches = {current_file:match(glob_to_pattern(source))}
     if #matches > 0 then
@@ -39,15 +40,11 @@ function M.try_patterns(current_file, patterns)
           result = result:gsub('%*', match, 1)
         end
       end
-      
-      if vim.fn.filereadable(result) == 1 then
-        return result
-      end
+      return result  -- Return regardless of file existence
     end
     
     -- Try alternate -> source
     matches = {current_file:match(glob_to_pattern(alternate))}
-    
     if #matches > 0 then
       local result = source
       -- Replace captured parts
@@ -60,10 +57,7 @@ function M.try_patterns(current_file, patterns)
           result = result:gsub('%*', match, 1)
         end
       end
-      
-      if vim.fn.filereadable(result) == 1 then
-        return result
-      end
+      return result  -- Return regardless of file existence
     end
   end
   

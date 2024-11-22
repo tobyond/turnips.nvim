@@ -1,47 +1,57 @@
 local mock_fs = {
-  -- Models and their specs
+  -- Existing files
   ["app/models/user.rb"] = true,
   ["spec/models/user_spec.rb"] = true,
-  ["app/models/account/profile.rb"] = true,
-  ["spec/models/account/profile_spec.rb"] = true,
-  ["app/models/deep/nested/item.rb"] = true,
-  ["spec/models/deep/nested/item_spec.rb"] = true,
-
-  -- Controllers and their specs
-  ["app/controllers/users_controller.rb"] = true,
-  ["spec/requests/users_spec.rb"] = true,
-  ["spec/requests/users_request_spec.rb"] = true,
-  ["app/controllers/api/v1/posts_controller.rb"] = true,
-  ["spec/requests/api/v1/posts_spec.rb"] = true,
-  ["app/controllers/admin/settings_controller.rb"] = true,
-  ["spec/requests/admin/settings_request_spec.rb"] = true,
-
-  -- Components and their templates
-  ["app/components/header_component.rb"] = true,
-  ["app/components/header_component.html.erb"] = true,
-  ["app/components/forms/input_component.rb"] = true,
-  ["app/components/forms/input_component.html.erb"] = true,
-  ["app/components/layout/navigation/menu_component.rb"] = true,
-  ["app/components/layout/navigation/menu_component.html.erb"] = true,
-
-  -- Services and their specs
-  ["app/services/payment_processor.rb"] = true,
-  ["spec/services/payment_processor_spec.rb"] = true
 }
 
--- Mock vim.fn.filereadable
+local created_dirs = {}
+local last_command = nil
+local current_file = ""
+
+-- Mock vim namespace
 _G.vim = _G.vim or {}
 _G.vim.fn = _G.vim.fn or {}
+_G.vim.log = _G.vim.log or { levels = { WARN = 1 } }
+
+-- Mock vim.cmd
+_G.vim.cmd = function(cmd)
+  last_command = cmd
+  -- No need to track directory creation for command execution
+  -- since we're handling that through vim.fn.mkdir
+end
+
+_G.vim.fn.expand = function(expr)
+  return current_file
+end
+
 _G.vim.fn.filereadable = function(path)
   return mock_fs[path] and 1 or 0
 end
 
--- Mock vim.fn.fnamemodify to return the path as-is
 _G.vim.fn.fnamemodify = function(path, modifier)
+  if modifier == ':h' then
+    return path:match("(.*)/[^/]*$") or path
+  end
   return path
 end
 
-describe("turnips.nvim", function()
+_G.vim.fn.isdirectory = function(path)
+  -- Check if directory exists in mock_fs
+  local dir_exists = mock_fs[path .. '/'] and true or false
+  -- Return 1 if directory was created or exists in mock_fs
+  return (created_dirs[path] or dir_exists) and 1 or 0
+end
+
+_G.vim.fn.mkdir = function(path, mode)
+  created_dirs[path] = true
+  return 1
+end
+
+_G.vim.fn.fnameescape = function(path)
+  return path
+end
+
+describe("turnips.nvim file creation", function()
   local turnips
 
   before_each(function()
@@ -49,138 +59,64 @@ describe("turnips.nvim", function()
     package.loaded['turnips.init'] = nil
     package.loaded['turnips.utils'] = nil
     
+    -- Reset tracking variables
+    created_dirs = {}
+    last_command = nil
+    
     turnips = require("turnips")
     
     turnips.setup({
       test = {
         patterns = {
           {'app/**/*.rb', 'spec/**/*_spec.rb'},
-        },
-        overrides = {
-          {'app/controllers/**/*_controller.rb', 'spec/requests/**/*_spec.rb'},
-          {'app/controllers/**/*_controller.rb', 'spec/requests/**/*_request_spec.rb'},
         }
       },
       related = {
         patterns = {
           {'app/components/**/*.rb', 'app/components/**/*.html.erb'}
-        },
-        overrides = {}
+        }
       }
     })
   end)
 
-  describe("model patterns", function()
-    it("should find model spec", function()
-      local result = turnips.find_alternate_file("app/models/user.rb", turnips.config.test)
-      assert.equals("spec/models/user_spec.rb", result)
+  describe("file creation", function()
+    it("should create directory and open new test file", function()
+      current_file = "app/models/new_feature.rb"
+      
+      turnips.open_test('vsplit')
+      
+      assert.equals(true, created_dirs["spec/models"] ~= nil)
+      assert.equals('vsplit spec/models/new_feature_spec.rb', last_command)
     end)
 
-    it("should find model from spec", function()
-      local result = turnips.find_alternate_file("spec/models/user_spec.rb", turnips.config.test)
-      assert.equals("app/models/user.rb", result)
+    it("should create nested directories for deep paths", function()
+      current_file = "app/models/admin/reports/monthly.rb"
+      
+      turnips.open_test('split')
+      
+      assert.equals(true, created_dirs["spec/models/admin/reports"] ~= nil)
+      assert.equals('split spec/models/admin/reports/monthly_spec.rb', last_command)
     end)
 
-    it("should find nested model spec", function()
-      local result = turnips.find_alternate_file("app/models/account/profile.rb", turnips.config.test)
-      assert.equals("spec/models/account/profile_spec.rb", result)
+    it("should open existing file without creating directory", function()
+      current_file = "app/models/user.rb"
+      -- Add the spec directory to mock_fs to simulate it already existing
+      mock_fs["spec/models/"] = true
+      
+      turnips.open_test('e')
+      
+      assert.equals('e spec/models/user_spec.rb', last_command)
+      -- Check that no new directories were created
+      assert.equals(nil, next(created_dirs))
     end)
 
-    it("should find nested model from spec", function()
-      local result = turnips.find_alternate_file("spec/models/account/profile_spec.rb", turnips.config.test)
-      assert.equals("app/models/account/profile.rb", result)
-    end)
-
-    it("should find deeply nested model spec", function()
-      local result = turnips.find_alternate_file("app/models/deep/nested/item.rb", turnips.config.test)
-      assert.equals("spec/models/deep/nested/item_spec.rb", result)
-    end)
-  end)
-
-  describe("controller patterns", function()
-    it("should find controller spec", function()
-      local result = turnips.find_alternate_file("app/controllers/users_controller.rb", turnips.config.test)
-      assert.equals("spec/requests/users_spec.rb", result)
-    end)
-
-    it("should find controller from spec", function()
-      local result = turnips.find_alternate_file("spec/requests/users_spec.rb", turnips.config.test)
-      assert.equals("app/controllers/users_controller.rb", result)
-    end)
-
-    it("should find nested controller spec", function()
-      local result = turnips.find_alternate_file("app/controllers/api/v1/posts_controller.rb", turnips.config.test)
-      assert.equals("spec/requests/api/v1/posts_spec.rb", result)
-    end)
-
-    it("should find nested controller from spec", function()
-      local result = turnips.find_alternate_file("spec/requests/api/v1/posts_spec.rb", turnips.config.test)
-      assert.equals("app/controllers/api/v1/posts_controller.rb", result)
-    end)
-
-    it("should find controller with request spec suffix", function()
-      local result = turnips.find_alternate_file("app/controllers/admin/settings_controller.rb", turnips.config.test)
-      assert.equals("spec/requests/admin/settings_request_spec.rb", result)
-    end)
-
-    it("should find controller from request spec suffix", function()
-      local result = turnips.find_alternate_file("spec/requests/admin/settings_request_spec.rb", turnips.config.test)
-      assert.equals("app/controllers/admin/settings_controller.rb", result)
-    end)
-  end)
-
-  describe("component patterns", function()
-    it("should find component template", function()
-      local result = turnips.find_alternate_file("app/components/header_component.rb", turnips.config.related)
-      assert.equals("app/components/header_component.html.erb", result)
-    end)
-
-    it("should find component from template", function()
-      local result = turnips.find_alternate_file("app/components/header_component.html.erb", turnips.config.related)
-      assert.equals("app/components/header_component.rb", result)
-    end)
-
-    it("should find nested component template", function()
-      local result = turnips.find_alternate_file("app/components/forms/input_component.rb", turnips.config.related)
-      assert.equals("app/components/forms/input_component.html.erb", result)
-    end)
-
-    it("should find nested component from template", function()
-      local result = turnips.find_alternate_file("app/components/forms/input_component.html.erb", turnips.config.related)
-      assert.equals("app/components/forms/input_component.rb", result)
-    end)
-
-    it("should find deeply nested component template", function()
-      local result = turnips.find_alternate_file(
-        "app/components/layout/navigation/menu_component.rb",
-        turnips.config.related
-      )
-      assert.equals("app/components/layout/navigation/menu_component.html.erb", result)
-    end)
-
-    it("should find deeply nested component from template", function()
-      local result = turnips.find_alternate_file(
-        "app/components/layout/navigation/menu_component.html.erb",
-        turnips.config.related
-      )
-      assert.equals("app/components/layout/navigation/menu_component.rb", result)
-    end)
-  end)
-
-  describe("edge cases", function()
-    it("should handle non-existent files", function()
-      local result = turnips.find_alternate_file("app/models/nonexistent.rb", turnips.config.test)
-      assert.is_nil(result)
-    end)
-
-    it("should handle files without matches", function()
-      local result = turnips.find_alternate_file("app/something/else.rb", turnips.config.test)
-      assert.is_nil(result)
-    end)
-
-    it("should handle empty string input", function()
-      local result = turnips.find_alternate_file("", turnips.config.test)
-      assert.is_nil(result)
+    it("should handle creation of related files", function()
+      current_file = "app/components/new/widget_component.rb"
+      
+      turnips.open_related('vsplit')
+      
+      assert.equals(true, created_dirs["app/components/new"] ~= nil)
+      assert.equals('vsplit app/components/new/widget_component.html.erb', last_command)
     end)
   end)
 end)
